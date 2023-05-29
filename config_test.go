@@ -1,4 +1,4 @@
-package jsonexporter
+package configloader
 
 import (
 	"testing"

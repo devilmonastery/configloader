@@ -1,6 +1,6 @@
 # ConfigLoader
 
-A simple config loader that watches (and polls) a file on disk,
+A simple config loader that watches (and polls) a YAML file on disk,
 reads and parses it when it changes, and makes the contents available
 to subscribers and readers.
 
