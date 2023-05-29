@@ -1,4 +1,4 @@
-module devilmonastery/ConfigLoader
+module devilmonastery/configloader
 
 go 1.20
 
