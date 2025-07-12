@@ -14,12 +14,13 @@ import (
 )
 
 type ConfigLoader[Config any] struct {
-	mu      sync.Mutex
-	path    string
-	fprint  string
-	conf    *Config
-	control chan string
-	subs    []chan Config
+	mu       sync.Mutex
+	path     string
+	fprint   string
+	conf     *Config
+	control  chan string
+	subs     []chan Config
+	callback func(Config) (Config, error) // callback for config validation/transformation
 }
 
 // This might return an error and a valid config loader.
@@ -64,6 +65,13 @@ func (b *ConfigLoader[Config]) SetConfigPath(path string) error {
 	return b.Load(path)
 }
 
+// RegisterCallback sets a callback to be invoked with each new config. If the callback returns an error, the config is not used.
+func (b *ConfigLoader[Config]) RegisterCallback(cb func(Config) (Config, error)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.callback = cb
+}
+
 func (b *ConfigLoader[Config]) Load(path string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -94,6 +102,17 @@ func (b *ConfigLoader[Config]) Load(path string) error {
 	if err != nil {
 		return fmt.Errorf("could not read config %q: %v", b.path, err)
 	}
+
+	// If callback is set, call it and use the returned config if no error
+	if b.callback != nil {
+		newConf, err := b.callback(*conf)
+		if err != nil {
+			log.Printf("config callback error: %v", err)
+			return err
+		}
+		conf = &newConf
+	}
+
 	log.Printf("read config %q, with hash: %s", b.path, fprint)
 
 	// store the config

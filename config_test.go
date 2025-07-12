@@ -1,6 +1,7 @@
 package configloader
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"testing"
@@ -93,6 +94,66 @@ func TestSubscribeConfigWithTempFile(t *testing.T) {
 			log.Printf("exiting after 5 iterations")
 			return
 		}
+	}
+}
+
+func TestConfigLoaderCallback(t *testing.T) {
+	log.SetFlags(log.Lshortfile | log.LstdFlags)
+
+	tmpfile, err := os.CreateTemp("", "config-*.yaml")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	initial := []byte("foo: foo!\n")
+	if _, err := tmpfile.Write(initial); err != nil {
+		t.Fatalf("failed to write initial config: %v", err)
+	}
+	tmpfile.Close()
+
+	loader, err := NewConfigLoader[TestConf](tmpfile.Name())
+	if err != nil {
+		t.Fatalf("error loading config: %v", err)
+	}
+
+	// Register a callback that rejects configs where Foo == "bad"
+	loader.RegisterCallback(func(conf TestConf) (TestConf, error) {
+		if conf.Foo == "bad" {
+			return conf, fmt.Errorf("invalid Foo value: bad")
+		}
+		return conf, nil
+	})
+
+	subscription := loader.Subscribe()
+
+	conf := <-subscription
+	if conf.Foo != "foo!" {
+		t.Errorf("expected 'foo' = 'foo!', got %q", conf.Foo)
+	}
+	log.Printf("Initial config: %v", conf)
+
+	// Update config with a valid value
+	if err := os.WriteFile(tmpfile.Name(), []byte("foo: good\n"), 0644); err != nil {
+		t.Fatalf("failed to update config: %v", err)
+	}
+
+	conf = <-subscription
+	if conf.Foo != "good" {
+		t.Errorf("expected 'foo' = 'good', got %q", conf.Foo)
+	}
+	log.Printf("Updated config: %v", conf)
+
+	// Update config with an invalid value
+	if err := os.WriteFile(tmpfile.Name(), []byte("foo: bad\n"), 0644); err != nil {
+		t.Fatalf("failed to update config: %v", err)
+	}
+
+	time.Sleep(1 * time.Second) // Allow time for the callback to process
+
+	conf = *loader.Config()
+	if conf.Foo != "good" {
+		t.Errorf("expected 'foo' = 'good', got %q", conf.Foo)
 	}
 
 }
