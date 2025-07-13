@@ -25,44 +25,56 @@ type ConfigLoader[Config any] struct {
 
 // This might return an error and a valid config loader.
 func NewConfigLoader[Config any](path string) (ret *ConfigLoader[Config], err error) {
-	//log.Printf("NewBotConfigLoader")
 	ret = &ConfigLoader[Config]{
 		control: make(chan string, 1),
 	}
-
-	err = ret.Load(path)
-	if err != nil {
-		log.Printf("config error: %v", err)
+	if path != "" {
+		ret.path = path
 	}
 
-	// Periodically reload the config.
-	go ret.watch()
-
-	return
+	return ret, nil
 }
 
+// Close stops the config loader and closes the control channel.
 func (b *ConfigLoader[Config]) Close() {
 	b.control <- "done"
 	close(b.control)
 }
 
+// Start begins the config loader's watch loop, which will reload the config periodically or on file changes.
+func (b *ConfigLoader[Config]) Start() {
+	// Periodically reload the config.
+	go b.watch()
+}
+
+// Subscribe returns a channel that will receive updates when the config changes.
 func (b *ConfigLoader[Config]) Subscribe() chan Config {
 	ret := make(chan Config, 1)
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	if b.conf == nil && b.path != "" {
+		b.mu.Unlock()
+		_ = b.Load()
+		b.mu.Lock()
+	}
 	b.subs = append(b.subs, ret)
-	ret <- *b.conf
+	if b.conf != nil {
+		ret <- *b.conf
+	}
+	b.mu.Unlock()
 	return ret
 }
 
+// SetConfigPath updates the config path and reloads the config.
 func (b *ConfigLoader[Config]) SetConfigPath(path string) error {
 	b.mu.Lock()
 	if b.path == path {
+		b.mu.Unlock()
 		return nil
 	}
+	b.path = path
 	b.mu.Unlock()
 	b.control <- "update"
-	return b.Load(path)
+	return b.Load()
 }
 
 // RegisterCallback sets a callback to be invoked with each new config. If the callback returns an error, the config is not used.
@@ -72,13 +84,10 @@ func (b *ConfigLoader[Config]) RegisterCallback(cb func(Config) (Config, error))
 	b.callback = cb
 }
 
-func (b *ConfigLoader[Config]) Load(path string) error {
+// Load reads the config file, unmarshals it, and broadcasts it to subscribers.
+func (b *ConfigLoader[Config]) Load() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-
-	if path != "" {
-		b.path = path
-	}
 
 	if b.path == "" {
 		return fmt.Errorf("no config path specified")
@@ -131,6 +140,19 @@ func (b *ConfigLoader[Config]) Load(path string) error {
 	return nil
 }
 
+// Config returns the current config. If the config has not been loaded yet, it will attempt to load it
+func (b *ConfigLoader[Config]) Config() (conf *Config) {
+	b.mu.Lock()
+	if b.conf == nil && b.path != "" {
+		b.mu.Unlock()
+		_ = b.Load()
+		b.mu.Lock()
+	}
+	conf = b.conf
+	b.mu.Unlock()
+	return
+}
+
 func (b *ConfigLoader[Config]) watch() {
 
 	w, err := fsnotify.NewWatcher()
@@ -140,7 +162,7 @@ func (b *ConfigLoader[Config]) watch() {
 		for {
 			select {
 			case <-time.After(time.Second * 10):
-				b.Load("")
+				b.Load()
 			case cmd := <-b.control:
 				if cmd == "done" {
 					log.Printf("exiting config pool loop")
@@ -186,17 +208,10 @@ func (b *ConfigLoader[Config]) watch() {
 				return
 			}
 			if event.Has(fsnotify.Write) {
-				b.Load("")
+				b.Load()
 			}
 		case <-time.After(time.Second * 10):
-			b.Load("")
+			b.Load()
 		}
 	}
-}
-
-func (b *ConfigLoader[Config]) Config() (conf *Config) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	conf = b.conf
-	return
 }
