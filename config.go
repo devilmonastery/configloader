@@ -72,10 +72,15 @@ func (b *ConfigLoader[Config]) SetConfigPath(path string, required bool) error {
 	}
 	b.required = required
 	b.path = path
-	log.Printf("config path set to: %s (required: %v)", path, required)
 	b.mu.Unlock()
 	b.control <- "update"
-	return b.Load()
+	err := b.Load()
+	if err != nil {
+		log.Printf("config path set to: %s (required: %v), error loading:%v", path, required, err)
+	} else {
+		log.Printf("config path set to: %s (required: %v), loaded", path, required)
+	}
+	return err
 }
 
 // RegisterCallback sets a callback to be invoked with each new config. If the callback returns an error, the config is not used.
@@ -85,23 +90,32 @@ func (b *ConfigLoader[Config]) RegisterCallback(cb func(Config) (Config, error))
 	b.callback = cb
 }
 
+func (b *ConfigLoader[Config]) defaultConfig() (Config, error) {
+	var zero Config
+	if b.callback == nil {
+		return zero, nil
+	}
+	return b.callback(zero)
+}
+
+func (b *ConfigLoader[Config]) DefaultConfig() (Config, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.defaultConfig()
+}
+
 // Load reads the config file, unmarshals it, and broadcasts it to subscribers.
 func (b *ConfigLoader[Config]) Load() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	log.Printf("loading config from %q", b.path)
-
-	if b.path == "" {
+	// if there is no path set, use the zero value of Config.
+	if b.path == "" && !b.required {
 		log.Printf("no config path set, using zero value")
-		var zero Config
-		if b.callback != nil {
-			newConf, err := b.callback(zero)
-			if err != nil {
-				log.Printf("config callback error: %v", err)
-				return err
-			}
-			zero = newConf
+		zero, err := b.defaultConfig()
+		if err != nil {
+			log.Printf("error getting default config: %v", err)
+			return err
 		}
 		b.conf = &zero
 		// Serialize the zero config to YAML and fingerprint it
@@ -124,47 +138,83 @@ func (b *ConfigLoader[Config]) Load() error {
 		return nil
 	}
 
-	configBytes, err := os.ReadFile(b.path)
-	if err != nil {
-		return fmt.Errorf("could not read config @ %q: %v", b.path, err)
+	// If there is no path, but the config is required, return an error.
+	// Weird case, but we want to be explicit about it.
+	if b.path == "" && b.required {
+		return fmt.Errorf("no config path set, but config is required")
 	}
 
-	fprint := fmt.Sprintf("%x", sha256.Sum256(configBytes))
-	if fprint == b.fprint {
-		// Same as before, end early.
+	// We have a path, so we can read the config file.
+	log.Printf("loading config from %q", b.path)
+	configBytes, err := os.ReadFile(b.path)
+	// successful file read; process the config.
+	if err == nil {
+		fprint := fmt.Sprintf("%x", sha256.Sum256(configBytes))
+		if fprint == b.fprint {
+			// Same as before, end early.
+			return nil
+		}
+
+		// Deserialize the config
+		conf := new(Config)
+		err = yaml.Unmarshal(configBytes, conf)
+		if err != nil {
+			return fmt.Errorf("could not deserialize config %q: %v", b.path, err)
+		}
+
+		// If callback is set, call it and use the returned config if no error
+		if b.callback != nil {
+			newConf, err := b.callback(*conf)
+			if err != nil {
+				log.Printf("config callback error, rejecting config: %v", err)
+				return err
+			}
+			conf = &newConf
+		}
+
+		log.Printf("read new config %q, with hash: %s", b.path, fprint)
+
+		// store the config
+		b.conf = conf
+		b.fprint = fprint
+
+		// broadcast
+		for _, s := range b.subs {
+			select {
+			case s <- *conf:
+			default:
+				log.Println("subscriber channel is full")
+			}
+		}
 		return nil
 	}
 
-	conf := new(Config)
-	err = yaml.Unmarshal(configBytes, conf)
+	// Unsuccessful file read; if required, return an error.
+	if b.conf == nil && b.required {
+		return fmt.Errorf("could not read required config @ %q, no config available: %v", b.path, err)
+	}
+
+	// if we have previously loaded a config, we can use it.
+	if b.conf != nil {
+		log.Printf("still using previous config, with hash: %s", b.fprint)
+		return nil
+	}
+
+	// If not required, use the default config, even if the file is busted.
+	zero, err := b.defaultConfig()
 	if err != nil {
-		return fmt.Errorf("could not read config %q: %v", b.path, err)
+		log.Printf("error getting default config: %v", err)
+		return err
 	}
-
-	// If callback is set, call it and use the returned config if no error
-	if b.callback != nil {
-		newConf, err := b.callback(*conf)
-		if err != nil {
-			log.Printf("config callback error: %v", err)
-			return err
-		}
-		conf = &newConf
+	yamlBytes, err := yaml.Marshal(zero)
+	if err != nil {
+		log.Printf("error serializing default config: %v", err)
+		return err
 	}
-
-	log.Printf("read config %q, with hash: %s", b.path, fprint)
-
-	// store the config
-	b.conf = conf
+	fprint := fmt.Sprintf("%x", sha256.Sum256(yamlBytes))
+	b.conf = &zero
 	b.fprint = fprint
-
-	// broadcast
-	for _, s := range b.subs {
-		select {
-		case s <- *conf:
-		default:
-			log.Println("subscriber channel is full")
-		}
-	}
+	log.Printf("using default config with hash: %s", b.fprint)
 
 	return nil
 }

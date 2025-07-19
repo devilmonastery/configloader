@@ -84,32 +84,50 @@ func TestLoadMissingConfig(t *testing.T) {
 	}
 	defer loader.Close()
 
-	log.Printf("1")
+	err = loader.SetConfigPath("testdata/noconfig.yaml", false)
+	log.Printf("err: %v", err)
+	if err != nil {
+		t.Fatalf("expected no error loading missing but not required config, got: %v", err)
+	}
+
+	conf := loader.Config()
+	if conf == nil {
+		t.Fatalf("expected non-nil config")
+	}
+}
+
+func TestLoadMissingConfig2(t *testing.T) {
+	log.SetFlags(log.Lshortfile | log.LstdFlags)
+
+	loader, err := NewConfigLoader[TestConf]()
+	if err != nil {
+		t.Fatalf("error loading config: %v", err)
+	}
+	if loader == nil {
+		t.Fatalf("error creating config loader")
+	}
+	defer loader.Close()
+
 	err = loader.SetConfigPath("testdata/noconfig.yaml", true)
 	if err == nil {
 		t.Fatalf("expected error loading missing config")
 	}
 
-	log.Printf("2")
 	conf := loader.Config()
 	if conf != nil {
 		t.Fatalf("expected nil config, got %v", conf)
 	}
 
-	log.Printf("3")
 	err = loader.SetConfigPath("testdata/noconfig.yaml", false)
 	log.Printf("err: %v", err)
-	if err == nil {
-		t.Fatalf("expected error loading missing config")
+	if err != nil {
+		t.Fatalf("expected no error loading missing, not-required config, got: %v", err)
 	}
 
-	log.Printf("4")
 	conf = loader.Config()
-	if conf != nil {
-		t.Fatalf("expected nil config, got %v", conf)
+	if conf == nil {
+		t.Fatalf("expected non-nil config")
 	}
-
-	log.Printf("5")
 }
 
 func TestSubscribeConfig(t *testing.T) {
