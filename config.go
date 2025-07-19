@@ -23,6 +23,10 @@ type ConfigLoader[Config any] struct {
 	callback func(Config) (Config, error) // callback for config validation/transformation
 }
 
+func New[Config any](path string) (ret *ConfigLoader[Config], err error) {
+	return NewConfigLoader[Config](path)
+}
+
 // This might return an error and a valid config loader.
 func NewConfigLoader[Config any](path string) (ret *ConfigLoader[Config], err error) {
 	ret = &ConfigLoader[Config]{
