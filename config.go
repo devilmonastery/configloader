@@ -23,17 +23,18 @@ type ConfigLoader[Config any] struct {
 	callback func(Config) (Config, error) // callback for config validation/transformation
 }
 
-func New[Config any](path string) (ret *ConfigLoader[Config], err error) {
-	return NewConfigLoader[Config](path)
+// New creates a new ConfigLoader instance.
+// If you want to set a path, use SetConfigPath after creation.
+// If no path is set it will return the default config (zero value of Config),
+// as modified by a registered callback, which can set default values.
+func New[Config any]() (ret *ConfigLoader[Config], err error) {
+	return NewConfigLoader[Config]()
 }
 
-// This might return an error and a valid config loader.
-func NewConfigLoader[Config any](path string) (ret *ConfigLoader[Config], err error) {
+// NewConfigLoader creates a new ConfigLoader instance.
+func NewConfigLoader[Config any]() (ret *ConfigLoader[Config], err error) {
 	ret = &ConfigLoader[Config]{
 		control: make(chan string, 1),
-	}
-	if path != "" {
-		ret.path = path
 	}
 
 	return ret, nil
@@ -93,9 +94,32 @@ func (b *ConfigLoader[Config]) Load() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	log.Printf("loading config from %q", b.path)
+
 	if b.path == "" {
-		return fmt.Errorf("no config path specified")
+		log.Printf("no config path set, using zero value")
+		var zero Config
+		if b.callback != nil {
+			newConf, err := b.callback(zero)
+			if err != nil {
+				log.Printf("config callback error: %v", err)
+				return err
+			}
+			zero = newConf
+		}
+		b.conf = &zero
+		b.fprint = ""
+		// broadcast
+		for _, s := range b.subs {
+			select {
+			case s <- zero:
+			default:
+				log.Println("subscriber channel is full")
+			}
+		}
+		return nil
 	}
+
 	configBytes, err := os.ReadFile(b.path)
 	if err != nil {
 		return fmt.Errorf("could not read config @ %q: %v", b.path, err)
@@ -147,9 +171,12 @@ func (b *ConfigLoader[Config]) Load() error {
 // Config returns the current config. If the config has not been loaded yet, it will attempt to load it
 func (b *ConfigLoader[Config]) Config() (conf *Config) {
 	b.mu.Lock()
-	if b.conf == nil && b.path != "" {
+	if b.conf == nil {
 		b.mu.Unlock()
-		_ = b.Load()
+		err := b.Load()
+		if err != nil {
+			log.Printf("error loading config: %v", err)
+		}
 		b.mu.Lock()
 	}
 	conf = b.conf
