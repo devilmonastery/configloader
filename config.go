@@ -145,7 +145,6 @@ func (b *ConfigLoader[Config]) Load() error {
 	}
 
 	// We have a path, so we can read the config file.
-	log.Printf("loading config from %q", b.path)
 	configBytes, err := os.ReadFile(b.path)
 	// successful file read; process the config.
 	if err == nil {
@@ -293,7 +292,7 @@ func (b *ConfigLoader[Config]) watch() {
 				log.Printf("config file changed: %s", event.Name)
 				b.Load()
 			}
-		case <-time.After(time.Second * 10):
+		case <-time.After(time.Second * 2):
 			b.Load()
 		}
 	}
