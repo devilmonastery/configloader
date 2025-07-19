@@ -16,6 +16,7 @@ import (
 type ConfigLoader[Config any] struct {
 	mu       sync.Mutex
 	path     string
+	required bool // if true, will return an error if no config is found
 	fprint   string
 	conf     *Config
 	control  chan string
@@ -36,7 +37,8 @@ func NewConfigLoader[Config any]() (ret *ConfigLoader[Config], err error) {
 	ret = &ConfigLoader[Config]{
 		control: make(chan string, 1),
 	}
-
+	// Periodically reload the config.
+	go ret.watch()
 	return ret, nil
 }
 
@@ -46,37 +48,31 @@ func (b *ConfigLoader[Config]) Close() {
 	close(b.control)
 }
 
-// Start begins the config loader's watch loop, which will reload the config periodically or on file changes.
-func (b *ConfigLoader[Config]) Start() {
-	// Periodically reload the config.
-	go b.watch()
-}
-
 // Subscribe returns a channel that will receive updates when the config changes.
 func (b *ConfigLoader[Config]) Subscribe() chan Config {
 	ret := make(chan Config, 1)
 	b.mu.Lock()
-	if b.conf == nil && b.path != "" {
-		b.mu.Unlock()
-		_ = b.Load()
-		b.mu.Lock()
-	}
 	b.subs = append(b.subs, ret)
-	if b.conf != nil {
-		ret <- *b.conf
-	}
+	conf := b.conf
 	b.mu.Unlock()
+	if conf != nil {
+		ret <- *conf
+	}
 	return ret
 }
 
-// SetConfigPath updates the config path and reloads the config.
-func (b *ConfigLoader[Config]) SetConfigPath(path string) error {
+// SetConfigPath updates the config path and, if the path changed, reloads the config.
+// Returns an error if the config file annot be loaded.
+func (b *ConfigLoader[Config]) SetConfigPath(path string, required bool) error {
 	b.mu.Lock()
-	if b.path == path {
+	// No-op
+	if b.path == path && b.required == required {
 		b.mu.Unlock()
 		return nil
 	}
+	b.required = required
 	b.path = path
+	log.Printf("config path set to: %s (required: %v)", path, required)
 	b.mu.Unlock()
 	b.control <- "update"
 	return b.Load()
@@ -108,7 +104,15 @@ func (b *ConfigLoader[Config]) Load() error {
 			zero = newConf
 		}
 		b.conf = &zero
-		b.fprint = ""
+		// Serialize the zero config to YAML and fingerprint it
+		yamlBytes, err := yaml.Marshal(zero)
+		if err != nil {
+			log.Printf("could not marshal zero config: %v", err)
+			b.fprint = ""
+		} else {
+			b.fprint = fmt.Sprintf("%x", sha256.Sum256(yamlBytes))
+		}
+		log.Printf("default config with hash: %s", b.fprint)
 		// broadcast
 		for _, s := range b.subs {
 			select {
@@ -123,9 +127,6 @@ func (b *ConfigLoader[Config]) Load() error {
 	configBytes, err := os.ReadFile(b.path)
 	if err != nil {
 		return fmt.Errorf("could not read config @ %q: %v", b.path, err)
-	}
-	if len(configBytes) < 10 {
-		return fmt.Errorf("empty or truncated config")
 	}
 
 	fprint := fmt.Sprintf("%x", sha256.Sum256(configBytes))
@@ -189,10 +190,10 @@ func (b *ConfigLoader[Config]) watch() {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("fsnotify error: %v", err)
-		log.Printf("polling config file: %s", b.path)
+		log.Printf("falling back to polling config file: %s", b.path)
 		for {
 			select {
-			case <-time.After(time.Second * 10):
+			case <-time.After(time.Second * 2):
 				b.Load()
 			case cmd := <-b.control:
 				if cmd == "done" {
@@ -239,6 +240,7 @@ func (b *ConfigLoader[Config]) watch() {
 				return
 			}
 			if event.Has(fsnotify.Write) {
+				log.Printf("config file changed: %s", event.Name)
 				b.Load()
 			}
 		case <-time.After(time.Second * 10):

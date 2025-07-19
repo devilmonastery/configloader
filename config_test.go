@@ -22,6 +22,7 @@ func TestLoadNoConfig(t *testing.T) {
 	if loader == nil {
 		t.Fatalf("error creating config loader")
 	}
+	defer loader.Close()
 
 	loader.RegisterCallback(func(conf TestConf) (TestConf, error) {
 		if conf.Foo == "" {
@@ -39,7 +40,7 @@ func TestLoadNoConfig(t *testing.T) {
 		t.Errorf("expected 'foo' = 'default', got %q", conf.Foo)
 	}
 
-	loader.SetConfigPath("testdata/config.yaml")
+	loader.SetConfigPath("testdata/config.yaml", true)
 	conf = loader.Config()
 
 	if conf.Foo != "foo!" {
@@ -57,8 +58,9 @@ func TestLoadConfig(t *testing.T) {
 	if loader == nil {
 		t.Fatalf("error creating config loader")
 	}
+	defer loader.Close()
 
-	err = loader.SetConfigPath("testdata/config.yaml")
+	err = loader.SetConfigPath("testdata/config.yaml", true)
 	if err != nil {
 		t.Fatalf("error loading config: %v", err)
 	}
@@ -80,17 +82,34 @@ func TestLoadMissingConfig(t *testing.T) {
 	if loader == nil {
 		t.Fatalf("error creating config loader")
 	}
+	defer loader.Close()
 
-	err = loader.SetConfigPath("testdata/noconfig.yaml")
+	log.Printf("1")
+	err = loader.SetConfigPath("testdata/noconfig.yaml", true)
 	if err == nil {
 		t.Fatalf("expected error loading missing config")
 	}
 
+	log.Printf("2")
 	conf := loader.Config()
 	if conf != nil {
 		t.Fatalf("expected nil config, got %v", conf)
 	}
 
+	log.Printf("3")
+	err = loader.SetConfigPath("testdata/noconfig.yaml", false)
+	log.Printf("err: %v", err)
+	if err == nil {
+		t.Fatalf("expected error loading missing config")
+	}
+
+	log.Printf("4")
+	conf = loader.Config()
+	if conf != nil {
+		t.Fatalf("expected nil config, got %v", conf)
+	}
+
+	log.Printf("5")
 }
 
 func TestSubscribeConfig(t *testing.T) {
@@ -103,8 +122,9 @@ func TestSubscribeConfig(t *testing.T) {
 	if loader == nil {
 		t.Fatalf("error creating config loader")
 	}
+	defer loader.Close()
 
-	err = loader.SetConfigPath("testdata/config.yaml")
+	err = loader.SetConfigPath("testdata/config.yaml", true)
 	if err != nil {
 		t.Fatalf("error loading config: %v", err)
 	}
@@ -137,8 +157,9 @@ func TestSubscribeConfigWithTempFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error loading config: %v", err)
 	}
+	defer loader.Close()
 
-	err = loader.SetConfigPath(tmpfile.Name())
+	err = loader.SetConfigPath(tmpfile.Name(), true)
 	if err != nil {
 		t.Fatalf("error loading config: %v", err)
 	}
@@ -196,7 +217,9 @@ func TestConfigLoaderCallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error loading config: %v", err)
 	}
-	err = loader.SetConfigPath(tmpfile.Name())
+	defer loader.Close()
+
+	err = loader.SetConfigPath(tmpfile.Name(), true)
 	if err != nil {
 		t.Fatalf("error loading config: %v", err)
 	}
