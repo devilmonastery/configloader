@@ -243,7 +243,13 @@ func (b *ConfigLoader[Config]) watch() {
 		for {
 			select {
 			case <-time.After(time.Second * 2):
-				b.Load()
+				// Only poll if we have a path to watch
+				b.mu.Lock()
+				hasPath := b.path != ""
+				b.mu.Unlock()
+				if hasPath {
+					b.Load()
+				}
 			case cmd := <-b.control:
 				if cmd == "done" {
 					log.Printf("exiting config pool loop")
@@ -259,8 +265,12 @@ func (b *ConfigLoader[Config]) watch() {
 	path := b.path
 	b.mu.Unlock()
 
-	log.Printf("watching config file: %s", b.path)
-	w.Add(filepath.Dir(path))
+	// Only start watching if we have a path
+	if path != "" {
+		log.Printf("watching config file: %s", path)
+		w.Add(filepath.Dir(path))
+	}
+
 	for {
 		select {
 		case cmd := <-b.control:
@@ -274,8 +284,12 @@ func (b *ConfigLoader[Config]) watch() {
 				path = b.path
 				b.mu.Unlock()
 				log.Printf("updating config watch path to: %q", path)
-				w.Remove(filepath.Dir(oldpath))
-				w.Add(filepath.Dir(b.path))
+				if oldpath != "" {
+					w.Remove(filepath.Dir(oldpath))
+				}
+				if path != "" {
+					w.Add(filepath.Dir(path))
+				}
 			}
 		case _, ok := <-w.Errors:
 			if !ok {
@@ -293,7 +307,13 @@ func (b *ConfigLoader[Config]) watch() {
 				b.Load()
 			}
 		case <-time.After(time.Second * 2):
-			b.Load()
+			// Only poll if we have a path to watch
+			b.mu.Lock()
+			hasPath := b.path != ""
+			b.mu.Unlock()
+			if hasPath {
+				b.Load()
+			}
 		}
 	}
 }
