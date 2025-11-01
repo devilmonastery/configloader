@@ -303,8 +303,11 @@ func (b *ConfigLoader[Config]) watch() {
 				return
 			}
 			if event.Has(fsnotify.Write) {
-				log.Printf("config file changed: %s", event.Name)
-				b.Load()
+				// Only reload if the changed file is our config file
+				if event.Name == path {
+					log.Printf("config file changed: %s", event.Name)
+					b.Load()
+				}
 			}
 		case <-time.After(time.Second * 2):
 			// Only poll if we have a path to watch
