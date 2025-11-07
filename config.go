@@ -73,13 +73,19 @@ func (b *ConfigLoader[Config]) SetConfigPath(path string, required bool) error {
 	b.required = required
 	b.path = path
 	b.mu.Unlock()
-	b.control <- "update"
+
+	// Load the config first to check for errors
 	err := b.Load()
 	if err != nil {
 		log.Printf("config path set to: %s (required: %v), error loading:%v", path, required, err)
 	} else {
 		log.Printf("config path set to: %s (required: %v), loaded", path, required)
 	}
+
+	// Then notify the watcher to update its path tracking
+	// The watcher won't duplicate the broadcast since fingerprint won't change
+	b.control <- "update"
+
 	return err
 }
 
@@ -96,6 +102,17 @@ func (b *ConfigLoader[Config]) defaultConfig() (Config, error) {
 		return zero, nil
 	}
 	return b.callback(zero)
+}
+
+// broadcastConfig sends config to all subscribers (must be called with mutex held)
+func (b *ConfigLoader[Config]) broadcastConfig(conf Config) {
+	for _, s := range b.subs {
+		select {
+		case s <- conf:
+		default:
+			log.Println("subscriber channel is full")
+		}
+	}
 }
 
 func (b *ConfigLoader[Config]) DefaultConfig() (Config, error) {
@@ -127,14 +144,8 @@ func (b *ConfigLoader[Config]) Load() error {
 			b.fprint = fmt.Sprintf("%x", sha256.Sum256(yamlBytes))
 		}
 		log.Printf("default config with hash: %s", b.fprint)
-		// broadcast
-		for _, s := range b.subs {
-			select {
-			case s <- zero:
-			default:
-				log.Println("subscriber channel is full")
-			}
-		}
+		// broadcast to subscribers
+		b.broadcastConfig(zero)
 		return nil
 	}
 
@@ -177,14 +188,8 @@ func (b *ConfigLoader[Config]) Load() error {
 		b.conf = conf
 		b.fprint = fprint
 
-		// broadcast
-		for _, s := range b.subs {
-			select {
-			case s <- *conf:
-			default:
-				log.Println("subscriber channel is full")
-			}
-		}
+		// broadcast to subscribers
+		b.broadcastConfig(*conf)
 		return nil
 	}
 
